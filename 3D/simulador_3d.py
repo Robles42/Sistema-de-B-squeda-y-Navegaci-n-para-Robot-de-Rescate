@@ -27,11 +27,10 @@ from dataclasses import dataclass
 
 import pygame
 
-# ---------- Configuración del mapa ----------
 COLUMNAS, FILAS = 20, 13
-INICIO = (1, 6)            # entrada del edificio (columna, fila)
-OBJETIVO = (18, 6)         # superviviente
-COSTO_GAS = 5              # costo extra por entrar a una celda con gas
+INICIO = (1, 6)            
+OBJETIVO = (18, 6)         
+COSTO_GAS = 5             
 
 LIBRE, ESCOMBRO, GAS = 0, 1, 2
 
@@ -53,17 +52,15 @@ DESCRIPCIONES = {
     "astar": "Como Dijkstra, guiado por distancia al superviviente.",
 }
 
-# (nombre, celdas que recorre el robot por segundo, nodos explorados por segundo)
 VELOCIDADES = [("Pausada", 3.0, 40.0), ("Normal", 6.0, 90.0), ("Rápida", 14.0, 240.0)]
 
-# ---------- Geometría de la vista ----------
 ANCHO, ALTO = 1240, 760
 MAPA_W = 900
 PANEL_X = MAPA_W
-TW, TH, HZ = 52, 26, 30    # ancho y alto de una celda en pantalla, y altura por unidad
+TW, TH, HZ = 52, 26, 30    # ancho y alto de una celda en pana,tall y altura por unidad
 CX, CY = (COLUMNAS - 1) / 2, (FILAS - 1) / 2
 
-# ---------- Colores ----------
+#  Colores 
 def rgb(h: str) -> tuple:
     return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
 
@@ -92,7 +89,7 @@ def aclara(c, f):
     return tuple(max(0, min(255, round(v * f))) for v in c)
 
 
-# ---------- Modelo y algoritmos ----------
+#  Modelo y algoritmos 
 def mapa_original():
     m = [[LIBRE] * COLUMNAS for _ in range(FILAS)]
     for x1, y1, x2, y2 in BLOQUES:
@@ -179,7 +176,7 @@ def buscar(mapa, algoritmo):
     )
 
 
-# ---------- Cámara isométrica ----------
+#  Cámara isométrica 
 class Vista:
     def __init__(self, ox, oy):
         self.ox, self.oy = ox, oy
@@ -223,7 +220,7 @@ CARAS = [((1, 0), (1, 0), (1, 1)), ((0, 1), (1, 1), (0, 1)),
          ((-1, 0), (0, 1), (0, 0)), ((0, -1), (0, 0), (1, 0))]
 
 
-# ---------- Botones ----------
+#  Botones 
 class Boton:
     def __init__(self, rect, texto, accion, color=None):
         self.rect = pygame.Rect(rect)
@@ -241,7 +238,7 @@ class Boton:
         return self.rect.collidepoint(pos)
 
 
-# ---------- Aplicación ----------
+#  Aplicacion 
 class App:
     def __init__(self, pantalla):
         self.pantalla = pantalla
@@ -272,7 +269,7 @@ class App:
         self.registrar("Sistema listo. Mapa de 20 × 13 celdas cargado.")
         self.registrar("Entrada en E, superviviente en S.")
 
-    # ----- interfaz -----
+    #  interfaz 
     def _crear_botones(self):
         x1, x2, w = PANEL_X + 20, PANEL_X + 175, 145
         ancho_total = 300
@@ -317,7 +314,7 @@ class App:
             lineas.append(actual)
         return lineas
 
-    # ----- acciones de control -----
+    #  acciones de control 
     def ciclar_algoritmo(self):
         self.idx_alg = (self.idx_alg + 1) % len(ALGORITMOS)
         self.reiniciar()
@@ -431,7 +428,7 @@ class App:
                     self.registrar(f"Celda ({x}, {y}) cambiada a {nombre}.")
                     return
 
-    # ----- eventos -----
+    #  eventos 
     def evento(self, ev):
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             if ev.pos[0] >= PANEL_X:
@@ -459,7 +456,7 @@ class App:
             elif ev.key == pygame.K_c:
                 self.comparar()
 
-    # ----- actualización por cuadro -----
+    #  actualización por cuadro 
     def posicion_robot(self):
         if self.fase in ("ruta", "fin") and self.ruta:
             i = min(self.idx_ruta, len(self.ruta) - 1)
@@ -490,7 +487,7 @@ class App:
             if self.idx_ruta >= len(self.ruta) - 1:
                 self._terminar()
 
-    # ----- dibujo del mapa 3D -----
+    #  dibujo del mapa 3D 
     def _diamante(self, x, y):
         return [self.vista.proyectar(x, y), self.vista.proyectar(x + 1, y),
                 self.vista.proyectar(x + 1, y + 1), self.vista.proyectar(x, y + 1)]
@@ -614,7 +611,7 @@ class App:
         pygame.draw.circle(s, CIAN, (cx - r * 0.2, cy - r * 0.2), int(r * 0.75))
         pygame.draw.circle(s, rgb("#d9fff9"), (cx - r * 0.35, cy - r * 0.35), max(2, int(r * 0.25)))
 
-    # ----- panel -----
+    #  panel 
     def dibujar_panel(self, s):
         pygame.draw.rect(s, PANEL, (PANEL_X, 0, ANCHO - PANEL_X, ALTO))
         pygame.draw.line(s, BORDE, (PANEL_X, 0), (PANEL_X, ALTO), 2)
