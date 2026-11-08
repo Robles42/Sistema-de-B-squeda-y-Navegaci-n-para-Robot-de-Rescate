@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot de rescate | Simulador de búsqueda</title>
+<style>
+  :root {
+    --bg: #08111b; --panel: #0f1c2b; --borde: #22354a; --texto: #e6eef6;
+    --suave: #8fa3b8; --cian: #43d9ce; --naranja: #ffb454; --rojo: #ff6f80; --verde: #83e3a0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; color: var(--texto);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(900px 500px at 10% -10%, #17314d 0, transparent 60%), var(--bg);
+  }
+  .shell { max-width: 1320px; margin: 0 auto; padding: 22px; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  .marca { display: flex; gap: 12px; align-items: center; }
+  .logo { width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; font-size: 22px;
+    color: var(--cian); background: #0f2a36; border: 1px solid #2d6474; }
+  .eyebrow { color: var(--cian); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; }
+  h1 { font-size: 20px; margin: 2px 0 0; }
+  .chip { font-size: 12px; color: var(--suave); border: 1px solid var(--borde); border-radius: 20px; padding: 6px 12px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); gap: 16px; }
+  .card { background: linear-gradient(160deg, #132336, #0d1828); border: 1px solid var(--borde);
+    border-radius: 16px; padding: 16px; box-shadow: 0 12px 30px #0003; }
+  .card h2 { font-size: 14px; margin: 0 0 4px; }
+  .sub { color: var(--suave); font-size: 12px; margin: 0 0 12px; }
+  .cabecera { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+  .estado { font-size: 12px; color: var(--verde); white-space: nowrap; }
+  .lienzo { background: #091521; border: 1px solid #263b50; border-radius: 12px; padding: 8px; }
+  canvas { width: 100%; height: auto; display: block; cursor: pointer; border-radius: 6px; }
+  .leyenda { display: flex; flex-wrap: wrap; gap: 12px 16px; color: var(--suave); font-size: 11px; margin-top: 10px; }
+  .leyenda span { display: flex; align-items: center; gap: 6px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .pista { margin-top: 10px; font-size: 12px; color: var(--suave); }
+  .side { display: flex; flex-direction: column; gap: 14px; }
+  label { display: block; font-size: 11px; color: var(--suave); font-weight: 650; letter-spacing: .04em; margin: 4px 0 6px; }
+  select, button { font: inherit; color: var(--texto); border: 1px solid #34506a; border-radius: 10px; background: #0a1724; padding: 9px 11px; }
+  select { width: 100%; }
+  .descripcion { font-size: 12px; color: var(--suave); margin: 6px 0 12px; min-height: 36px; }
+  .acciones { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button { cursor: pointer; font-weight: 650; transition: filter .15s, transform .15s; }
+  button:hover { filter: brightness(1.15); transform: translateY(-1px); }
+  .principal { grid-column: 1 / -1; background: #0a7b7d; border-color: #2bb3ae; }
+  .secundario { background: #17293b; }
+  .comparar { grid-column: 1 / -1; background: #10292d; border-color: #2c7770; color: #c4f0ea; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat { background: #0b1825; border: 1px solid #203449; border-radius: 12px; padding: 10px; }
+  .stat .etiqueta { font-size: 10px; color: var(--suave); letter-spacing: .05em; }
+  .stat strong { display: block; font-size: 18px; margin-top: 2px; }
+  .barra { height: 5px; background: #203146; border-radius: 4px; margin-top: 6px; overflow: hidden; }
+  .barra i { display: block; height: 100%; width: 0; background: var(--verde); transition: width .3s, background .3s; }
+  .resultado { margin-top: 10px; background: #0b1924; border-radius: 10px; padding: 10px; font-size: 12px; color: var(--suave); min-height: 40px; }
+  .tabla { overflow-x: auto; margin-top: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid #243447; white-space: nowrap; }
+  th { color: var(--suave); font-weight: 600; font-size: 11px; }
+  tr.recomendado td { color: var(--verde); }
+  .nota { font-size: 11px; color: var(--suave); margin: 8px 0 0; }
+  .bitacora { height: 150px; overflow: auto; font: 12px/1.7 ui-monospace, Consolas, monospace; color: var(--suave); }
+  .bitacora div::before { content: "› "; color: var(--cian); }
+  footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: #6f8498; font-size: 11px; margin-top: 16px; }
+  @media (max-width: 920px) { .layout { grid-template-columns: 1fr; } }
+  @media (max-width: 520px) { .chip { display: none; } .stats { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div class="marca">
+      <div class="logo">⌖</div>
+      <div>
+        <div class="eyebrow">Sistema de búsqueda y navegación</div>
+        <h1>Robot de rescate · simulador de rutas</h1>
+      </div>
+    </div>
+    <div class="chip">Simulación 2D · mapa conocido</div>
+  </header>
+
+  <section class="layout">
+    <section class="card">
+      <div class="cabecera">
+        <div>
+          <h2>Edificio colapsado</h2>
+          <p class="sub">El robot debe llegar desde la entrada (E) hasta el superviviente (S).</p>
+        </div>
+        <div class="estado" id="estado">Listo</div>
+      </div>
+      <div class="lienzo"><canvas id="mapa" width="800" height="520" aria-label="Mapa de la simulación"></canvas></div>
+      <div class="leyenda">
+        <span><i class="sw" style="background:#43d9ce"></i>Robot</span>
+        <span><i class="sw" style="background:#83e3a0"></i>Superviviente</span>
+        <span><i class="sw" style="background:#2c3b4c"></i>Escombros</span>
+        <span><i class="sw" style="background:#b7682e"></i>Fuga de gas</span>
+        <span><i class="sw" style="background:rgba(67,217,206,.4)"></i>Explorado</span>
+        <span><i class="sw" style="background:#ff6f80"></i>Ruta final</span>
+      </div>
+      <p class="pista">Haz clic en una celda para editarla: libre → escombro → gas → libre. La entrada y la meta no se pueden cambiar.</p>
+    </section>
+
+    <aside class="side">
+      <section class="card">
+        <h2>Planificación</h2>
+        <p class="sub">Elige cómo buscar la ruta y pulsa iniciar.</p>
+        <label for="algo">ALGORITMO</label>
+        <select id="algo">
+          <option value="astar" selected>A* · costo + heurística</option>
+          <option value="dijkstra">Dijkstra · menor costo</option>
+          <option value="bfs">BFS · menor número de pasos</option>
+        </select>
+        <p class="descripcion" id="descripcion">Igual que Dijkstra, pero guiado por una estimación de distancia al superviviente.</p>
+        <label for="velocidad">VELOCIDAD</label>
+        <select id="velocidad">
+          <option value="170">Pausada</option>
+          <option value="90" selected>Normal</option>
+          <option value="35">Rápida</option>
+        </select>
+        <div class="acciones" style="margin-top:12px">
+          <button class="principal" id="boton-iniciar">▶ Iniciar</button>
+          <button class="secundario" id="reiniciar">↺ Reiniciar</button>
+          <button class="comparar" id="comparar">▦ Comparar algoritmos</button>
+          <button class="secundario" id="restablecer" style="grid-column:1/-1">Restablecer mapa original</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Indicadores</h2>
+        <p class="sub">Resultados de la última búsqueda.</p>
+        <div class="stats">
+          <div class="stat"><div class="etiqueta">PASOS DE LA RUTA</div><strong id="pasos">—</strong></div>
+          <div class="stat"><div class="etiqueta">NODOS EXPLORADOS</div><strong id="explorados">—</strong></div>
+          <div class="stat"><div class="etiqueta">CELDAS CON GAS</div><strong id="gas">—</strong><div class="barra"><i id="barra-gas"></i></div></div>
+          <div class="stat"><div class="etiqueta">COSTO TOTAL</div><strong id="costo">—</strong></div>
+          <div class="stat" style="grid-column:1/-1"><div class="etiqueta">TIEMPO DE CÁLCULO</div><strong id="tiempo">—</strong></div>
+        </div>
+        <div class="resultado" id="resultado">Elige un algoritmo y pulsa Iniciar.</div>
+        <div class="tabla" id="comparacion"></div>
+      </section>
+
+      <section class="card">
+        <h2>Bitácora del robot</h2>
+        <div class="bitacora" id="bitacora"></div>
+      </section>
+    </aside>
+  </section>
+
+  <footer>
+    <span>Práctica académica · búsqueda informada y no informada</span>
+    <span>Valores de demostración en un entorno simulado; no representan un robot físico.</span>
+  </footer>
+</main>
+<script src="simulador.js"></script>
+</body>
+</html>
