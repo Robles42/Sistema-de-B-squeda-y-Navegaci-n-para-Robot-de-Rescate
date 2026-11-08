@@ -213,4 +213,3 @@ Para cumplir con esta sección, ejecuta `python simulador_3d.py` y guarda las ca
 
 
 
-> Nota: El archivo `vista_previa_3d.png` corresponde únicamente a una prueba interna y no exime de adjuntar las capturas requeridas para la entrega final.
