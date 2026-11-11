@@ -2,6 +2,7 @@
 Simulador 3D de búsqueda para robot de rescate (vista isométrica).
 
 Compara BFS, Dijkstra y A* sobre un edificio con escombros y fugas de gas.
+Incluye cámara controlada con el mouse y un editor de mapa.
 
 Requisitos: Python 3.8 o superior y pygame.
     pip install pygame
@@ -9,20 +10,34 @@ Requisitos: Python 3.8 o superior y pygame.
 Ejecución:
     python simulador_3d.py
 
-Controles:
-    Clic en el mapa   editar celda (libre -> escombro -> gas -> libre)
-    Espacio           iniciar / pausar / reanudar
-    Q / E             girar la cámara 90 grados
-    + / -  o rueda    acercar / alejar
-    R                 reiniciar
-    C                 comparar algoritmos
-    O                 cambiar entre con obstáculos y sin obstáculos
+Cámara (siempre disponible):
+    Arrastrar clic derecho    girar e inclinar la cámara
+    Arrastrar clic central    mover el mapa
+    Rueda  o  + / -           acercar / alejar
+    Q / E                     girar 90 grados (animado)
+    V                         restablecer la cámara
+
+Simulación:
+    Clic en una celda         editar celda (libre -> escombro -> gas -> libre)
+    Arrastrar clic izquierdo  también gira la cámara
+    Espacio                   iniciar / pausar / reanudar
+    R reiniciar · C comparar · O con / sin obstáculos
+
+Editor de mapa (Tab para entrar / salir):
+    Clic izquierdo            dibuja con la herramienta activa (Mayús = borrar)
+    1 / 2 / 3                 material: libre / escombro / gas
+    B L F G                   pincel / línea / relleno / gotero
+    Ctrl+Z / Ctrl+Y           deshacer / rehacer
+    Ctrl+S / Ctrl+L           guardar / cargar mapa_rescate.json
 """
 from __future__ import annotations
 
 import heapq
 import itertools
+import json
 import math
+import os
+import random
 import time
 from dataclasses import dataclass
 
@@ -35,6 +50,7 @@ OBJETIVO = (18, 6)         # superviviente
 COSTO_GAS = 5              # costo extra por entrar a una celda con gas
 
 LIBRE, ESCOMBRO, GAS = 0, 1, 2
+NOMBRE_CELDA = {LIBRE: "libre", ESCOMBRO: "escombro", GAS: "gas"}
 
 BLOQUES = [
     (4, 0, 4, 4), (4, 7, 4, 12), (8, 2, 8, 9), (12, 0, 12, 5),
@@ -57,12 +73,23 @@ DESCRIPCIONES = {
 # (nombre, celdas que recorre el robot por segundo, nodos explorados por segundo)
 VELOCIDADES = [("Pausada", 3.0, 40.0), ("Normal", 6.0, 90.0), ("Rápida", 14.0, 240.0)]
 
+# ---------- Editor ----------
+HERRAMIENTAS = {
+    "pincel": "Pincel", "linea": "Línea", "rect": "Rect.", "contorno": "Contorno",
+    "relleno": "Relleno", "entrada": "Entrada", "meta": "Meta", "gotero": "Gotero",
+}
+GROSORES = [1, 2, 3]
+DENSIDADES = [0.15, 0.25, 0.35]
+LIMITE_HISTORIAL = 100
+ARCHIVO_MAPA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mapa_rescate.json")
+
 # ---------- Geometría de la vista ----------
 ANCHO, ALTO = 1240, 760
 MAPA_W = 900
 PANEL_X = MAPA_W
 TW, TH, HZ = 52, 26, 30    # ancho y alto de una celda en pantalla, y altura por unidad
 CX, CY = (COLUMNAS - 1) / 2, (FILAS - 1) / 2
+
 
 # ---------- Colores ----------
 def rgb(h: str) -> tuple:
@@ -77,11 +104,14 @@ CIAN = rgb("#43d9ce")
 VERDE = rgb("#83e3a0")
 ROJO = rgb("#ff6f80")
 NARANJA = rgb("#ffb454")
+GRIS_AZUL = rgb("#9fb3c8")
 PISO = rgb("#14273d")
 PISO_ALT = rgb("#112237")
 PISO_RUINA = rgb("#1d2836")
 PISO_GAS = rgb("#3a2a1f")
 PARED = rgb("#5a6b7e")
+
+COLOR_MATERIAL = {LIBRE: ROJO, ESCOMBRO: GRIS_AZUL, GAS: NARANJA}   # vista previa del editor
 
 
 def mezcla(a, b, t):
@@ -128,19 +158,19 @@ class Resultado:
     ms: float
 
 
-def buscar(mapa, algoritmo):
+def buscar(mapa, algoritmo, inicio=INICIO, objetivo=OBJETIVO):
     inicio_tiempo = time.perf_counter()
     usa_gas = algoritmo != "bfs"
 
     def estimar(p):
-        return abs(p[0] - OBJETIVO[0]) + abs(p[1] - OBJETIVO[1])
+        return abs(p[0] - objetivo[0]) + abs(p[1] - objetivo[1])
 
-    costo = {INICIO: 0}
+    costo = {inicio: 0}
     previo = {}
     cerrados = set()
     orden = []
     desempate = itertools.count()
-    frontera = [(estimar(INICIO) if algoritmo == "astar" else 0, next(desempate), 0, INICIO)]
+    frontera = [(estimar(inicio) if algoritmo == "astar" else 0, next(desempate), 0, inicio)]
     llego = False
 
     while frontera:
@@ -149,7 +179,7 @@ def buscar(mapa, algoritmo):
             continue
         cerrados.add(pos)
         orden.append(pos)
-        if pos == OBJETIVO:
+        if pos == objetivo:
             llego = True
             break
         for v in vecinos(mapa, pos):
@@ -163,10 +193,10 @@ def buscar(mapa, algoritmo):
 
     ruta = []
     if llego:
-        p = OBJETIVO
+        p = objetivo
         while True:
             ruta.append(p)
-            if p == INICIO:
+            if p == inicio:
                 break
             p = previo[p]
         ruta.reverse()
@@ -178,48 +208,89 @@ def buscar(mapa, algoritmo):
         llego=llego,
         pasos=len(ruta) - 1 if ruta else 0,
         gas=sum(1 for x, y in ruta if mapa[y][x] == GAS),
-        costo=costo[OBJETIVO] if llego else None,
+        costo=costo[objetivo] if llego else None,
         ms=(time.perf_counter() - inicio_tiempo) * 1000,
     )
+
+
+# ---------- Utilidades de edición ----------
+def linea_celdas(a, b):
+    """Celdas de una línea entre a y b (Bresenham)."""
+    (x0, y0), (x1, y1) = a, b
+    dx, dy = abs(x1 - x0), -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+    celdas = []
+    while True:
+        celdas.append((x0, y0))
+        if (x0, y0) == (x1, y1):
+            break
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x0 += sx
+        if e2 <= dx:
+            err += dx
+            y0 += sy
+    return celdas
+
+
+def celdas_forma(herramienta, a, b):
+    """Celdas de una línea, un rectángulo relleno o un contorno entre a y b."""
+    if herramienta == "linea":
+        return linea_celdas(a, b)
+    x1, x2 = sorted((a[0], b[0]))
+    y1, y2 = sorted((a[1], b[1]))
+    celdas = []
+    for y in range(y1, y2 + 1):
+        for x in range(x1, x2 + 1):
+            if herramienta == "rect" or x in (x1, x2) or y in (y1, y2):
+                celdas.append((x, y))
+    return celdas
 
 
 # ---------- Cámara isométrica ----------
 class Vista:
     def __init__(self, ox, oy):
+        self.ox0, self.oy0 = ox, oy
         self.ox, self.oy = ox, oy
-        self.giro = 0       # 0..3, cada uno son 90 grados
+        self.angulo = 0.0          # giro actual en radianes
+        self.angulo_obj = 0.0      # giro al que se dirige (animación de Q/E)
+        self.inclinacion = 1.0     # 0.35 (casi de lado) .. 1.4 (casi desde arriba)
+        self.zoom = 1.0
+
+    def reiniciar(self):
+        self.ox, self.oy = self.ox0, self.oy0
+        self.angulo_obj = 0.0
+        self.inclinacion = 1.0
         self.zoom = 1.0
 
     def rotar(self, dx, dy):
-        k = self.giro
-        if k == 1:
-            return -dy, dx
-        if k == 2:
-            return -dx, -dy
-        if k == 3:
-            return dy, -dx
-        return dx, dy
+        c, s = math.cos(self.angulo), math.sin(self.angulo)
+        return dx * c - dy * s, dx * s + dy * c
 
     def proyectar(self, x, y, z=0.0):
         """Convierte coordenadas de celda (esquinas en enteros) a píxeles."""
         dx, dy = self.rotar(x - CX, y - CY)
         s = self.zoom
+        altura = HZ * (1.5 - 0.5 * self.inclinacion)
         return (self.ox + (dx - dy) * TW / 2 * s,
-                self.oy + (dx + dy) * TH / 2 * s - z * HZ * s)
+                self.oy + (dx + dy) * TH / 2 * s * self.inclinacion - z * altura * s)
+
+    def desproyectar(self, px, py):
+        """Inverso de proyectar al nivel del suelo: píxeles -> coordenadas de celda."""
+        s = self.zoom
+        a = (px - self.ox) / (TW / 2 * s)
+        b = (py - self.oy) / (TH / 2 * s * self.inclinacion)
+        dx, dy = (a + b) / 2, (b - a) / 2
+        c, sn = math.cos(-self.angulo), math.sin(-self.angulo)
+        return dx * c - dy * sn + CX, dx * sn + dy * c + CY
 
     def profundidad(self, x, y):
         """Valor para ordenar: lo que tiene más profundidad se dibuja después."""
         dx, dy = self.rotar(x - CX, y - CY)
         return dx + dy
-
-
-def punto_en_poligono(p, pts):
-    signos = []
-    for i in range(len(pts)):
-        ax, ay = pts[i]
-        bx, by = pts[(i + 1) % len(pts)]
-        signos.append((bx - ax) * (p[1] - ay) - (by - ay) * (p[0] - ax))
-    return all(s >= 0 for s in signos) or all(s <= 0 for s in signos)
 
 
 # Caras laterales de un bloque: (normal, esquina A, esquina B), relativas a la celda
@@ -229,16 +300,21 @@ CARAS = [((1, 0), (1, 0), (1, 1)), ((0, 1), (1, 1), (0, 1)),
 
 # ---------- Botones ----------
 class Boton:
-    def __init__(self, rect, texto, accion, color=None):
+    def __init__(self, rect, texto, accion, color=None, activo=None):
         self.rect = pygame.Rect(rect)
-        self.texto = texto
+        self.texto = texto          # texto fijo o función que devuelve el texto
         self.accion = accion
         self.color = color or rgb("#17293b")
+        self.activo = activo        # función opcional: True si el botón está seleccionado
 
     def dibujar(self, s, fuente):
-        pygame.draw.rect(s, self.color, self.rect, border_radius=8)
-        pygame.draw.rect(s, BORDE, self.rect, width=1, border_radius=8)
-        etiqueta = fuente.render(self.texto, True, TEXTO)
+        act = bool(self.activo and self.activo())
+        color = mezcla(self.color, CIAN, 0.3) if act else self.color
+        pygame.draw.rect(s, color, self.rect, border_radius=8)
+        pygame.draw.rect(s, CIAN if act else BORDE, self.rect,
+                         width=2 if act else 1, border_radius=8)
+        texto = self.texto() if callable(self.texto) else self.texto
+        etiqueta = fuente.render(texto, True, TEXTO)
         s.blit(etiqueta, etiqueta.get_rect(center=self.rect.center))
 
     def contiene(self, pos):
@@ -256,8 +332,25 @@ class App:
         self.vista = Vista(MAPA_W / 2, 350)
         self.con_obstaculos = True
         self.mapa = mapa_original(self.con_obstaculos)
+        self.inicio = INICIO
+        self.objetivo = OBJETIVO
         self.tiempo = 0.0
+        self.arrastre = None           # arrastre de cámara con el mouse
 
+        # editor
+        self.modo_edicion = False
+        self.herramienta = "pincel"
+        self.material = ESCOMBRO
+        self.idx_grosor = 0
+        self.idx_dens = 1
+        self.sim_h = False
+        self.sim_v = False
+        self.hover = None              # celda bajo el mouse
+        self.trazo = None              # trazo de edición en curso
+        self.deshacer_pila = []
+        self.rehacer_pila = []
+
+        # simulación
         self.idx_alg = 0
         self.idx_vel = 1
         self.corriendo = False
@@ -274,10 +367,17 @@ class App:
         self.resultado = "Elige un algoritmo y pulsa Iniciar."
 
         self.botones = self._crear_botones()
+        self.btn_editor = Boton((PANEL_X + 20, 62, 300, 32), self._texto_editor,
+                                self.alternar_editor, rgb("#2a2350"),
+                                activo=lambda: self.modo_edicion)
+        self.botones_edicion = self._crear_botones_edicion()
         self.registrar("Sistema listo. Mapa de 20 × 13 celdas cargado.")
         self.registrar("Entrada en E, superviviente en S.")
 
     # ----- interfaz -----
+    def _texto_editor(self):
+        return "Salir del editor (Tab)" if self.modo_edicion else "Editor de mapa (Tab)"
+
     def _crear_botones(self):
         x1, x2, w = PANEL_X + 20, PANEL_X + 175, 145
         ancho_total = 300
@@ -294,6 +394,45 @@ class App:
             Boton((x2, 316, w, 32), "Acercar (+)", lambda: self.zoom(0.08)),               # 9
             Boton((x1, 100, ancho_total, 32), "", self.alternar_modo, rgb("#3a2a1a")),     # 10
         ]
+
+    def _crear_botones_edicion(self):
+        x0 = PANEL_X + 20
+        lista = []
+
+        def add(x, y, w, h, texto, accion, activo=None):
+            lista.append(Boton((x, y, w, h), texto, accion, None, activo))
+
+        # herramientas: 4 columnas x 2 filas
+        for i, (clave, nombre) in enumerate(HERRAMIENTAS.items()):
+            add(x0 + (i % 4) * 77, 122 + (i // 4) * 34, 69, 28, nombre,
+                lambda c=clave: self.elegir_herramienta(c),
+                lambda c=clave: self.herramienta == c)
+        # materiales
+        for i, (valor, nombre) in enumerate([(LIBRE, "1 · Libre"), (ESCOMBRO, "2 · Escombro"),
+                                             (GAS, "3 · Gas")]):
+            add(x0 + i * 102, 210, 96, 30, nombre,
+                lambda v=valor: self.elegir_material(v),
+                lambda v=valor: self.material == v)
+        # opciones
+        add(x0, 270, 147, 28, "Simetría H", self.alternar_sim_h, lambda: self.sim_h)
+        add(x0 + 153, 270, 147, 28, "Simetría V", self.alternar_sim_v, lambda: self.sim_v)
+        add(x0, 304, 147, 28, lambda: f"Grosor: {GROSORES[self.idx_grosor]}",
+            self.ciclar_grosor)
+        add(x0 + 153, 304, 147, 28, lambda: f"Densidad: {int(DENSIDADES[self.idx_dens] * 100)}%",
+            self.ciclar_densidad)
+        # acciones
+        add(x0, 364, 147, 28, "Deshacer", self.deshacer)
+        add(x0 + 153, 364, 147, 28, "Rehacer", self.rehacer)
+        add(x0, 398, 147, 28, "Limpiar todo", self.limpiar)
+        add(x0 + 153, 398, 147, 28, "Borde", self.poner_borde)
+        add(x0, 432, 147, 28, "Aleatorio", self.aleatorio)
+        add(x0 + 153, 432, 147, 28, "Validar ruta", self.validar)
+        add(x0, 466, 147, 28, "Guardar", self.guardar_mapa)
+        add(x0 + 153, 466, 147, 28, "Cargar", self.cargar_mapa)
+        return lista
+
+    def botones_activos(self):
+        return [self.btn_editor] + (self.botones_edicion if self.modo_edicion else self.botones)
 
     def registrar(self, mensaje):
         self.bitacora.append(mensaje)
@@ -333,10 +472,10 @@ class App:
         self.idx_vel = (self.idx_vel + 1) % len(VELOCIDADES)
 
     def girar(self, sentido):
-        self.vista.giro = (self.vista.giro + sentido) % 4
+        self.vista.angulo_obj += sentido * math.pi / 2
 
     def zoom(self, delta):
-        self.vista.zoom = max(0.6, min(1.05, self.vista.zoom + delta))
+        self.vista.zoom = max(0.4, min(2.0, self.vista.zoom + delta))
 
     def reiniciar(self):
         self.corriendo = False
@@ -356,20 +495,26 @@ class App:
         self.registrar("Simulación reiniciada.")
 
     def restablecer(self):
+        snap = self._estado()
         self.mapa = mapa_original(self.con_obstaculos)
+        self.inicio, self.objetivo = INICIO, OBJETIVO
         self.reiniciar()
+        self._confirmar(snap)
         self.registrar("Mapa restablecido al original.")
 
     def alternar_modo(self):
+        snap = self._estado()
         self.con_obstaculos = not self.con_obstaculos
         self.mapa = mapa_original(self.con_obstaculos)
+        self.inicio, self.objetivo = INICIO, OBJETIVO
         self.reiniciar()
+        self._confirmar(snap)
         self.registrar("Modo sin obstáculos: sin escombros ni gas."
                        if not self.con_obstaculos else "Modo con obstáculos.")
 
     def nueva_busqueda(self):
         clave = ALGORITMOS[self.idx_alg]
-        r = buscar(self.mapa, clave)
+        r = buscar(self.mapa, clave, self.inicio, self.objetivo)
         self.ultimo = r
         self.orden, self.ruta = r.orden, r.ruta
         self.visitas = {pos: i for i, pos in enumerate(r.orden)}
@@ -415,7 +560,7 @@ class App:
 
     def comparar(self):
         self.reiniciar()
-        resultados = [buscar(self.mapa, c) for c in ALGORITMOS]
+        resultados = [buscar(self.mapa, c, self.inicio, self.objetivo) for c in ALGORITMOS]
 
         def costo_total(r):
             return r.pasos + COSTO_GAS * r.gas if r.llego else math.inf
@@ -431,47 +576,389 @@ class App:
         self.registrar(f"Comparación lista. Recomendado: {NOMBRES[recomendado.algoritmo]}."
                        if recomendado.llego else "Comparación lista. Ningún algoritmo llegó.")
 
+    # ----- selección de celdas con el mouse -----
+    def celda_en(self, px, py):
+        """Celda del suelo bajo el píxel (px, py), o None si queda fuera del mapa."""
+        fx, fy = self.vista.desproyectar(px, py)
+        x, y = math.floor(fx), math.floor(fy)
+        if 0 <= x < COLUMNAS and 0 <= y < FILAS:
+            return (x, y)
+        return None
+
     def editar_celda(self, px, py):
-        for y in range(FILAS):
-            for x in range(COLUMNAS):
-                pts = self._diamante(x, y)
-                if punto_en_poligono((px, py), pts):
-                    if (x, y) in (INICIO, OBJETIVO):
-                        return
-                    self.reiniciar()
-                    self.mapa[y][x] = (self.mapa[y][x] + 1) % 3
-                    nombre = {LIBRE: "libre", ESCOMBRO: "escombro", GAS: "gas"}[self.mapa[y][x]]
-                    self.registrar(f"Celda ({x}, {y}) cambiada a {nombre}.")
-                    return
+        """Modo simulación: un clic cicla la celda libre -> escombro -> gas."""
+        c = self.celda_en(px, py)
+        if c is None or c in (self.inicio, self.objetivo):
+            return
+        x, y = c
+        snap = self._estado()
+        self.mapa[y][x] = (self.mapa[y][x] + 1) % 3
+        self._confirmar(snap)
+        self.registrar(f"Celda ({x}, {y}) cambiada a {NOMBRE_CELDA[self.mapa[y][x]]}.")
+
+    # ----- historial (deshacer / rehacer) -----
+    def _estado(self):
+        return ([fila[:] for fila in self.mapa], self.inicio, self.objetivo)
+
+    def _restaurar(self, estado):
+        mapa, self.inicio, self.objetivo = estado
+        self.mapa = [fila[:] for fila in mapa]
+        self.reiniciar()
+
+    def _confirmar(self, snap):
+        """Guarda snap en el historial si el mapa cambió desde entonces."""
+        if self._estado() != snap:
+            self.deshacer_pila.append(snap)
+            del self.deshacer_pila[:-LIMITE_HISTORIAL]
+            self.rehacer_pila.clear()
+            self.reiniciar()
+
+    def deshacer(self):
+        if not self.deshacer_pila:
+            self.registrar("Nada que deshacer.")
+            return
+        self.rehacer_pila.append(self._estado())
+        self._restaurar(self.deshacer_pila.pop())
+        self.registrar("Deshacer.")
+
+    def rehacer(self):
+        if not self.rehacer_pila:
+            self.registrar("Nada que rehacer.")
+            return
+        self.deshacer_pila.append(self._estado())
+        self._restaurar(self.rehacer_pila.pop())
+        self.registrar("Rehacer.")
+
+    # ----- editor de mapa -----
+    def alternar_editor(self):
+        self.modo_edicion = not self.modo_edicion
+        self.trazo = None
+        self.reiniciar()
+        self.registrar("Editor de mapa activado." if self.modo_edicion
+                       else "Editor de mapa cerrado.")
+
+    def elegir_herramienta(self, clave):
+        self.herramienta = clave
+
+    def elegir_material(self, valor):
+        self.material = valor
+        if self.herramienta in ("entrada", "meta", "gotero"):
+            self.herramienta = "pincel"
+
+    def alternar_sim_h(self):
+        self.sim_h = not self.sim_h
+
+    def alternar_sim_v(self):
+        self.sim_v = not self.sim_v
+
+    def ciclar_grosor(self):
+        self.idx_grosor = (self.idx_grosor + 1) % len(GROSORES)
+
+    def ciclar_densidad(self):
+        self.idx_dens = (self.idx_dens + 1) % len(DENSIDADES)
+
+    def celdas_afectadas(self, base, usar_grosor, simetria=True):
+        """Expande celdas base con el grosor del pincel y la simetría; quita entrada/meta."""
+        g = GROSORES[self.idx_grosor] if usar_grosor else 1
+        desde = -(g // 2)
+        res = set()
+        for x, y in base:
+            for ddx in range(desde, desde + g):
+                for ddy in range(desde, desde + g):
+                    res.add((x + ddx, y + ddy))
+        if simetria and (self.sim_h or self.sim_v):
+            extra = set()
+            for x, y in res:
+                if self.sim_h:
+                    extra.add((COLUMNAS - 1 - x, y))
+                if self.sim_v:
+                    extra.add((x, FILAS - 1 - y))
+                if self.sim_h and self.sim_v:
+                    extra.add((COLUMNAS - 1 - x, FILAS - 1 - y))
+            res |= extra
+        protegidas = (self.inicio, self.objetivo)
+        return {c for c in res
+                if 0 <= c[0] < COLUMNAS and 0 <= c[1] < FILAS and c not in protegidas}
+
+    def _pintar(self, celdas, valor):
+        for x, y in celdas:
+            self.mapa[y][x] = valor
+
+    def _huella(self, herramienta, base):
+        """Celdas que se verían afectadas por la herramienta (para la vista previa)."""
+        if herramienta in ("pincel", "linea"):
+            return self.celdas_afectadas(base, True)
+        if herramienta in ("rect", "contorno", "relleno"):
+            return self.celdas_afectadas(base, False)
+        return {c for c in base if 0 <= c[0] < COLUMNAS and 0 <= c[1] < FILAS}
+
+    def rellenar(self, inicio, valor):
+        x0, y0 = inicio
+        original = self.mapa[y0][x0]
+        if original == valor:
+            return
+        pila, vistos = [inicio], {inicio}
+        while pila:
+            x, y = pila.pop()
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if (0 <= nx < COLUMNAS and 0 <= ny < FILAS and (nx, ny) not in vistos
+                        and self.mapa[ny][nx] == original):
+                    vistos.add((nx, ny))
+                    pila.append((nx, ny))
+        self._pintar(self.celdas_afectadas(vistos, False), valor)
+
+    def iniciar_trazo(self, pos):
+        c = self.celda_en(*pos)
+        if c is None:
+            return
+        h = self.herramienta
+        borrar = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+        valor = LIBRE if borrar else self.material
+        snap = self._estado()
+        x, y = c
+
+        if h == "gotero":
+            self.material = self.mapa[y][x]
+            self.registrar(f"Gotero: material {NOMBRE_CELDA[self.material]}.")
+            return
+        if h == "relleno":
+            self.rellenar(c, valor)
+            self._confirmar(snap)
+            return
+        if h in ("entrada", "meta"):
+            otro = self.objetivo if h == "entrada" else self.inicio
+            if c == otro:
+                return
+            self.mapa[y][x] = LIBRE
+            if h == "entrada":
+                self.inicio = c
+            else:
+                self.objetivo = c
+            self._confirmar(snap)
+            self.registrar(f"{'Entrada' if h == 'entrada' else 'Superviviente'} movido a ({x}, {y}).")
+            return
+
+        self.trazo = {"herr": h, "ini": c, "ult": c, "valor": valor, "snap": snap}
+        if h == "pincel":
+            self._pintar(self.celdas_afectadas([c], True), valor)
+
+    def mover_trazo(self, c):
+        t = self.trazo
+        if t is None or c is None or c == t["ult"]:
+            return
+        if t["herr"] == "pincel":
+            self._pintar(self.celdas_afectadas(linea_celdas(t["ult"], c), True), t["valor"])
+        t["ult"] = c
+
+    def terminar_trazo(self, pos):
+        t = self.trazo
+        if t is None:
+            return
+        if pos[0] < PANEL_X:
+            self.mover_trazo(self.celda_en(*pos))
+        h = t["herr"]
+        if h in ("linea", "rect", "contorno"):
+            base = celdas_forma(h, t["ini"], t["ult"])
+            self._pintar(self.celdas_afectadas(base, h == "linea"), t["valor"])
+        self._confirmar(t["snap"])
+        self.trazo = None
+
+    def vista_previa(self):
+        """(celdas, color) que se resaltan sobre el mapa en modo editor."""
+        h = self.herramienta
+        borrar = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+        valor = LIBRE if borrar else self.material
+        if h == "entrada":
+            color = CIAN
+        elif h == "meta":
+            color = VERDE
+        elif h == "gotero":
+            color = TEXTO
+        else:
+            color = COLOR_MATERIAL[valor]
+        if self.trazo and h in ("linea", "rect", "contorno"):
+            base = celdas_forma(h, self.trazo["ini"], self.trazo["ult"])
+        elif self.hover:
+            base = [self.hover]
+        else:
+            return set(), color
+        if self.trazo:
+            color = COLOR_MATERIAL[self.trazo["valor"]]
+        return self._huella(h, base), color
+
+    def limpiar(self):
+        snap = self._estado()
+        self.mapa = [[LIBRE] * COLUMNAS for _ in range(FILAS)]
+        self._confirmar(snap)
+        self.registrar("Mapa limpiado.")
+
+    def poner_borde(self):
+        snap = self._estado()
+        borde = {(x, y) for x in range(COLUMNAS) for y in range(FILAS)
+                 if x in (0, COLUMNAS - 1) or y in (0, FILAS - 1)}
+        self._pintar(self.celdas_afectadas(borde, False, simetria=False), self.material)
+        self._confirmar(snap)
+        self.registrar(f"Borde del mapa: {NOMBRE_CELDA[self.material]}.")
+
+    def aleatorio(self):
+        snap = self._estado()
+        d = DENSIDADES[self.idx_dens]
+        garantizado = False
+        for _ in range(40):
+            m = [[LIBRE] * COLUMNAS for _ in range(FILAS)]
+            for y in range(FILAS):
+                for x in range(COLUMNAS):
+                    if (x, y) in (self.inicio, self.objetivo):
+                        continue
+                    r = random.random()
+                    if r < d:
+                        m[y][x] = ESCOMBRO
+                    elif r < d + 0.06:
+                        m[y][x] = GAS
+            if buscar(m, "bfs", self.inicio, self.objetivo).llego:
+                garantizado = True
+                break
+        self.mapa = m
+        self._confirmar(snap)
+        self.registrar("Mapa aleatorio con ruta posible." if garantizado
+                       else "Mapa aleatorio (sin ruta garantizada).")
+
+    def validar(self):
+        r = buscar(self.mapa, "bfs", self.inicio, self.objetivo)
+        if r.llego:
+            self.registrar(f"Hay ruta: {r.pasos} pasos mínimos hasta el superviviente.")
+        else:
+            self.registrar("Sin ruta: los escombros bloquean el paso.")
+
+    def guardar_mapa(self):
+        datos = {"columnas": COLUMNAS, "filas": FILAS, "mapa": self.mapa,
+                 "inicio": list(self.inicio), "objetivo": list(self.objetivo)}
+        try:
+            with open(ARCHIVO_MAPA, "w", encoding="utf-8") as f:
+                json.dump(datos, f)
+            self.registrar("Mapa guardado en mapa_rescate.json.")
+        except OSError as e:
+            self.registrar(f"No se pudo guardar: {e.strerror or e}")
+
+    def cargar_mapa(self):
+        try:
+            with open(ARCHIVO_MAPA, encoding="utf-8") as f:
+                d = json.load(f)
+            mapa = d["mapa"]
+            ini, obj = tuple(d["inicio"]), tuple(d["objetivo"])
+            ok = (d["columnas"] == COLUMNAS and d["filas"] == FILAS and len(mapa) == FILAS
+                  and all(len(fila) == COLUMNAS and all(v in (0, 1, 2) for v in fila)
+                          for fila in mapa)
+                  and 0 <= ini[0] < COLUMNAS and 0 <= ini[1] < FILAS
+                  and 0 <= obj[0] < COLUMNAS and 0 <= obj[1] < FILAS and ini != obj)
+            if not ok:
+                raise ValueError("formato no válido")
+        except FileNotFoundError:
+            self.registrar("No hay mapa guardado todavía.")
+            return
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            self.registrar(f"No se pudo cargar: {e}")
+            return
+        snap = self._estado()
+        self.mapa = [fila[:] for fila in mapa]
+        self.inicio, self.objetivo = ini, obj
+        self.mapa[ini[1]][ini[0]] = LIBRE
+        self.mapa[obj[1]][obj[0]] = LIBRE
+        self._confirmar(snap)
+        self.registrar("Mapa cargado.")
 
     # ----- eventos -----
     def evento(self, ev):
-        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+        v = self.vista
+        if ev.type == pygame.MOUSEBUTTONDOWN:
             if ev.pos[0] >= PANEL_X:
-                for b in self.botones:
-                    if b.contiene(ev.pos):
-                        b.accion()
-                        break
-            else:
-                self.editar_celda(*ev.pos)
+                if ev.button == 1:
+                    for b in self.botones_activos():
+                        if b.contiene(ev.pos):
+                            b.accion()
+                            break
+            elif ev.button == 1 and self.modo_edicion:
+                self.iniciar_trazo(ev.pos)
+            elif ev.button in (1, 2, 3):
+                self.arrastre = {"btn": ev.button, "ini": ev.pos,
+                                 "ult": ev.pos, "movido": False}
+        elif ev.type == pygame.MOUSEMOTION and self.arrastre:
+            a = self.arrastre
+            dx, dy = ev.pos[0] - a["ult"][0], ev.pos[1] - a["ult"][1]
+            a["ult"] = ev.pos
+            if not a["movido"] and math.hypot(ev.pos[0] - a["ini"][0],
+                                              ev.pos[1] - a["ini"][1]) > 5:
+                a["movido"] = True
+            if a["movido"]:
+                if a["btn"] == 2:                      # clic central: mover
+                    v.ox += dx
+                    v.oy += dy
+                else:                                  # girar e inclinar
+                    v.angulo += dx * 0.01
+                    v.angulo_obj = v.angulo
+                    v.inclinacion = max(0.35, min(1.4, v.inclinacion - dy * 0.005))
+        elif ev.type == pygame.MOUSEBUTTONUP:
+            if ev.button == 1 and self.trazo:
+                self.terminar_trazo(ev.pos)
+            elif self.arrastre and ev.button == self.arrastre["btn"]:
+                if ev.button == 1 and not self.arrastre["movido"]:
+                    self.editar_celda(*ev.pos)         # clic simple: editar celda
+                self.arrastre = None
         elif ev.type == pygame.MOUSEWHEEL:
             self.zoom(0.06 * ev.y)
         elif ev.type == pygame.KEYDOWN:
-            if ev.key == pygame.K_SPACE:
+            self._tecla(ev)
+
+    def _tecla(self, ev):
+        k = ev.key
+        v = self.vista
+        if ev.mod & (pygame.KMOD_CTRL | pygame.KMOD_META):      # atajos con Ctrl
+            if self.modo_edicion:
+                if k == pygame.K_z:
+                    self.rehacer() if ev.mod & pygame.KMOD_SHIFT else self.deshacer()
+                elif k == pygame.K_y:
+                    self.rehacer()
+                elif k == pygame.K_s:
+                    self.guardar_mapa()
+                elif k == pygame.K_l:
+                    self.cargar_mapa()
+            return
+        # teclas comunes
+        if k == pygame.K_TAB:
+            self.alternar_editor()
+        elif k == pygame.K_q:
+            self.girar(-1)
+        elif k == pygame.K_e:
+            self.girar(1)
+        elif k in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
+            self.zoom(0.08)
+        elif k in (pygame.K_MINUS, pygame.K_KP_MINUS):
+            self.zoom(-0.08)
+        elif k == pygame.K_v:
+            v.reiniciar()
+        elif self.modo_edicion:
+            if k in (pygame.K_1, pygame.K_KP1):
+                self.elegir_material(LIBRE)
+            elif k in (pygame.K_2, pygame.K_KP2):
+                self.elegir_material(ESCOMBRO)
+            elif k in (pygame.K_3, pygame.K_KP3):
+                self.elegir_material(GAS)
+            elif k == pygame.K_b:
+                self.elegir_herramienta("pincel")
+            elif k == pygame.K_l:
+                self.elegir_herramienta("linea")
+            elif k == pygame.K_f:
+                self.elegir_herramienta("relleno")
+            elif k == pygame.K_g:
+                self.elegir_herramienta("gotero")
+        else:
+            if k == pygame.K_SPACE:
                 self.alternar()
-            elif ev.key == pygame.K_q:
-                self.girar(-1)
-            elif ev.key == pygame.K_e:
-                self.girar(1)
-            elif ev.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
-                self.zoom(0.08)
-            elif ev.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
-                self.zoom(-0.08)
-            elif ev.key == pygame.K_o:
+            elif k == pygame.K_o:
                 self.alternar_modo()
-            elif ev.key == pygame.K_r:
+            elif k == pygame.K_r:
                 self.reiniciar_manual()
-            elif ev.key == pygame.K_c:
+            elif k == pygame.K_c:
                 self.comparar()
 
     # ----- actualización por cuadro -----
@@ -483,10 +970,19 @@ class App:
             a, b = self.ruta[i], self.ruta[i + 1]
             t = self.progreso
             return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
-        return INICIO
+        return self.inicio
 
     def actualizar(self, dt):
         self.tiempo += dt
+        v = self.vista
+        v.angulo += (v.angulo_obj - v.angulo) * min(1.0, dt * 10)
+
+        if self.modo_edicion:
+            mx, my = pygame.mouse.get_pos()
+            self.hover = self.celda_en(mx, my) if mx < PANEL_X else None
+            if self.trazo:
+                self.mover_trazo(self.hover)
+
         _, celdas_s, nodos_s = VELOCIDADES[self.idx_vel]
         if not self.corriendo:
             return
@@ -516,6 +1012,16 @@ class App:
         capa = pygame.Surface((radio * 2, radio * 2), pygame.SRCALPHA)
         pygame.draw.circle(capa, (*color, max(0, min(255, int(alfa)))), (radio, radio), radio)
         s.blit(capa, (centro[0] - radio, centro[1] - radio))
+
+    def _resaltar(self, s, celdas, color, alfa=90):
+        if not celdas:
+            return
+        capa = pygame.Surface((MAPA_W, ALTO), pygame.SRCALPHA)
+        for x, y in celdas:
+            pts = self._diamante(x, y)
+            pygame.draw.polygon(capa, (*color, alfa), pts)
+            pygame.draw.polygon(capa, (*color, 230), pts, 2)
+        s.blit(capa, (0, 0))
 
     def _caja(self, s, x, y, h, color):
         base = (x, y)
@@ -578,8 +1084,8 @@ class App:
                 pygame.draw.lines(s, ROJO, False, puntos, 4)
 
         # Entrada
-        ex, ey = self.vista.proyectar(INICIO[0] + 0.5, INICIO[1] + 0.5, 0.05)
-        pygame.draw.polygon(s, CIAN, self._diamante(*INICIO), 2)
+        ex, ey = self.vista.proyectar(self.inicio[0] + 0.5, self.inicio[1] + 0.5, 0.05)
+        pygame.draw.polygon(s, CIAN, self._diamante(*self.inicio), 2)
         self._texto(s, "E", self.fuente_chica, CIAN, (ex, ey), centro=True)
 
         # Objetos ordenados por profundidad: paredes, superviviente y robot
@@ -588,7 +1094,8 @@ class App:
             for x in range(COLUMNAS):
                 if self.mapa[y][x] == ESCOMBRO:
                     objetos.append((self.vista.profundidad(x + 0.5, y + 0.5), "pared", (x, y)))
-        objetos.append((self.vista.profundidad(OBJETIVO[0] + 0.5, OBJETIVO[1] + 0.5), "meta", OBJETIVO))
+        objetos.append((self.vista.profundidad(self.objetivo[0] + 0.5, self.objetivo[1] + 0.5),
+                        "meta", self.objetivo))
         rx, ry = self.posicion_robot()
         objetos.append((self.vista.profundidad(rx + 0.5, ry + 0.5) + 0.05, "robot", (rx, ry)))
         objetos.sort(key=lambda o: o[0])
@@ -611,11 +1118,21 @@ class App:
             elif tipo == "robot":
                 self._dibujar_robot(s, dato[0] + 0.5, dato[1] + 0.5, ahora)
 
+        # Vista previa del editor
+        if self.modo_edicion:
+            celdas, color = self.vista_previa()
+            self._resaltar(s, celdas, color)
+
         # Indicaciones
         self._texto(s, "Edificio colapsado", self.fuente_titulo, TEXTO, (20, 16))
-        self._texto(s, self.estado, self.fuente, VERDE, (20, 46))
-        self._texto(s, "Clic: editar celda · Espacio: iniciar · Q/E: girar · +/−: zoom",
-                    self.fuente_chica, SUAVE, (20, ALTO - 28))
+        if self.modo_edicion:
+            self._texto(s, f"Editor · {HERRAMIENTAS[self.herramienta]} · "
+                           f"{NOMBRE_CELDA[self.material]}", self.fuente, NARANJA, (20, 46))
+            ayuda = "Izq: dibujar (Mayús = borrar) · Der: girar · Central: mover · Rueda: zoom · Tab: salir"
+        else:
+            self._texto(s, self.estado, self.fuente, VERDE, (20, 46))
+            ayuda = "Clic: editar · Arrastrar: girar · Clic central: mover · Rueda: zoom · V: centrar"
+        self._texto(s, ayuda, self.fuente_chica, SUAVE, (20, ALTO - 28))
 
     def _dibujar_robot(self, s, rx, ry, ahora):
         z = self.vista.zoom
@@ -640,9 +1157,26 @@ class App:
         self.botones[0].texto = f"Algoritmo: {NOMBRES[ALGORITMOS[self.idx_alg]]}"
         self.botones[1].texto = f"Velocidad: {VELOCIDADES[self.idx_vel][0]}"
         self.botones[10].texto = "Modo: " + ("Con obstáculos" if self.con_obstaculos else "Sin obstáculos")
-        for b in self.botones:
+        for b in self.botones_activos():
             b.dibujar(s, self.fuente)
-        self._texto(s, DESCRIPCIONES[ALGORITMOS[self.idx_alg]], self.fuente_chica, SUAVE, (PANEL_X + 20, 352))
+
+        if self.modo_edicion:
+            self._panel_edicion(s)
+        else:
+            self._panel_simulacion(s)
+
+        # Bitácora
+        y = 680
+        pygame.draw.line(s, BORDE, (PANEL_X + 20, y - 8), (ANCHO - 20, y - 8), 1)
+        self._texto(s, "Bitácora", self.fuente, TEXTO, (PANEL_X + 20, y))
+        y += 24
+        for linea in self.bitacora[-3:]:
+            self._texto(s, "› " + linea, self.fuente_chica, SUAVE, (PANEL_X + 20, y))
+            y += 17
+
+    def _panel_simulacion(self, s):
+        self._texto(s, DESCRIPCIONES[ALGORITMOS[self.idx_alg]], self.fuente_chica, SUAVE,
+                    (PANEL_X + 20, 352))
 
         # Indicadores
         r = self.ultimo
@@ -680,16 +1214,42 @@ class App:
                 for v, x in zip(valores, xs):
                     self._texto(s, v, self.fuente_chica, color, (x, y))
                 y += 19
-            self._texto(s, "★ menor costo total (pasos + 5 × gas)", self.fuente_chica, SUAVE, (PANEL_X + 20, y))
+            self._texto(s, "★ menor costo total (pasos + 5 × gas)", self.fuente_chica, SUAVE,
+                        (PANEL_X + 20, y))
 
-        # Bitácora
-        y = 680
-        pygame.draw.line(s, BORDE, (PANEL_X + 20, y - 8), (ANCHO - 20, y - 8), 1)
-        self._texto(s, "Bitácora", self.fuente, TEXTO, (PANEL_X + 20, y))
-        y += 24
-        for linea in self.bitacora[-3:]:
-            self._texto(s, "› " + linea, self.fuente_chica, SUAVE, (PANEL_X + 20, y))
-            y += 17
+    def _panel_edicion(self, s):
+        x = PANEL_X + 20
+        for texto, y in (("Herramienta", 102), ("Material", 192),
+                         ("Opciones", 252), ("Acciones", 346)):
+            self._texto(s, texto, self.fuente_chica, SUAVE, (x, y))
+
+        # Información
+        y = 510
+        if self.hover:
+            hx, hy = self.hover
+            info = f"Celda ({hx}, {hy}) · {NOMBRE_CELDA[self.mapa[hy][hx]]}"
+            if self.hover == self.inicio:
+                info += " · entrada"
+            elif self.hover == self.objetivo:
+                info += " · superviviente"
+        else:
+            info = "Celda: —"
+        self._texto(s, info, self.fuente, TEXTO, (x, y))
+        y += 22
+        total = COLUMNAS * FILAS
+        esc = sum(f.count(ESCOMBRO) for f in self.mapa)
+        gas = sum(f.count(GAS) for f in self.mapa)
+        self._texto(s, f"Escombros: {esc} · Gas: {gas} · Libres: {total - esc - gas}",
+                    self.fuente, SUAVE, (x, y))
+        y += 28
+        ayudas = ["Izq: dibujar (Mayús = borrar)",
+                  "Der: girar · Central: mover · Rueda: zoom",
+                  "1/2/3 material · B L F G herramientas",
+                  "Ctrl+Z / Ctrl+Y deshacer y rehacer",
+                  "Ctrl+S / Ctrl+L guardar y cargar"]
+        for linea in ayudas:
+            self._texto(s, linea, self.fuente_chica, SUAVE, (x, y))
+            y += 18
 
 
 def main():
